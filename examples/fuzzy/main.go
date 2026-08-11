@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	sensitive "github.com/sensitive-lite/sensitive-lite"
+	sensitive "github.com/kaidong77/sensitive-lite"
 )
 
 // ============================================================================

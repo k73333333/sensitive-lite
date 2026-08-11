@@ -50,7 +50,7 @@ sensitive-lite/
 
 | 目录/文件 | 用途 | 公开性 |
 |---|---|---|
-| `go.mod` | 模块路径 `github.com/sensitive-lite/sensitive-lite` | 公开 |
+| `go.mod` | 模块路径 `github.com/kaidong77/sensitive-lite` | 公开 |
 | `*.go`（根目录） | Filter 公开 API（sensitive/options/result/logger） | 公开 |
 | `internal/core/` | 核心引擎实现（DFA/Normalizer/映射表） | 内部 |
 | `go.sum` | 依赖校验 | 公开 |
@@ -58,7 +58,7 @@ sensitive-lite/
 用户通过以下命令拉取核心模块：
 
 ```bash
-go get github.com/sensitive-lite/sensitive-lite
+go get github.com/kaidong77/sensitive-lite
 ```
 
 拉取后本地仅有上述核心内容，**不包含** `examples/` 目录（因为 `examples/` 拥有独立 `go.mod`，是一个不同的 Go 模块）。
@@ -82,20 +82,20 @@ go get github.com/sensitive-lite/sensitive-lite
 ### 核心模块（`go.mod`）
 
 ```go
-module github.com/sensitive-lite/sensitive-lite
+module github.com/kaidong77/sensitive-lite
 go 1.21
 ```
 
 ### 示例模块（`examples/go.mod`）
 
 ```go
-module github.com/sensitive-lite/sensitive-lite/examples
+module github.com/kaidong77/sensitive-lite/examples
 go 1.21
 
 // replace 指令指向本地核心模块
-replace github.com/sensitive-lite/sensitive-lite => ../
+replace github.com/kaidong77/sensitive-lite => ../
 
-require github.com/sensitive-lite/sensitive-lite v0.0.0
+require github.com/kaidong77/sensitive-lite v0.0.0
 ```
 
 用户在本地开发时可以直接运行示例：
@@ -110,9 +110,9 @@ cd examples && go run ./basic/main.go
 
 ### 为什么 `go get` 不会拉取 examples？
 
-因为 `examples/go.mod` 将 `examples/` 声明为一个**独立的 Go 模块**（`github.com/sensitive-lite/sensitive-lite/examples`），与核心模块（`github.com/sensitive-lite/sensitive-lite`）是不同的模块路径。
+因为 `examples/go.mod` 将 `examples/` 声明为一个**独立的 Go 模块**（`github.com/kaidong77/sensitive-lite/examples`），与核心模块（`github.com/kaidong77/sensitive-lite`）是不同的模块路径。
 
-当用户执行 `go get github.com/sensitive-lite/sensitive-lite` 时，Go 工具链仅拉取核心模块的依赖树，不会自动拉取 `examples` 模块。
+当用户执行 `go get github.com/kaidong77/sensitive-lite` 时，Go 工具链仅拉取核心模块的依赖树，不会自动拉取 `examples` 模块。
 
 ---
 
@@ -141,7 +141,7 @@ doc/
 ### 作为库依赖引入
 
 ```go
-import "github.com/sensitive-lite/sensitive-lite"
+import "github.com/kaidong77/sensitive-lite"
 
 filter := sensitive.New([]string{"敏感词"}, sensitive.WithFuzzy(true))
 ```
@@ -149,7 +149,7 @@ filter := sensitive.New([]string{"敏感词"}, sensitive.WithFuzzy(true))
 ### 本地开发（完整克隆仓库）
 
 ```bash
-git clone https://github.com/sensitive-lite/sensitive-lite.git
+git clone https://github.com/kaidong77/sensitive-lite.git
 cd sensitive-lite
 
 # 运行测试

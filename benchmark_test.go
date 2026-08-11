@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sensitive-lite/sensitive-lite/internal/core"
+	"github.com/kaidong77/sensitive-lite/internal/core"
 )
 
 // rng 全局随机数生成器（Go 1.20+ 推荐使用 rand.New 替代废弃的 rand.Seed）

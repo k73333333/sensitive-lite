@@ -10,7 +10,7 @@
 ## 5 分钟快速接入
 
 ```bash
-go get github.com/sensitive-lite/sensitive-lite
+go get github.com/kaidong77/sensitive-lite
 ```
 
 ```go
@@ -18,7 +18,7 @@ package main
 
 import (
     "fmt"
-    sensitive "github.com/sensitive-lite/sensitive-lite"
+    sensitive "github.com/kaidong77/sensitive-lite"
 )
 
 func main() {

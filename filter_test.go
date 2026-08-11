@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sensitive-lite/sensitive-lite/internal/core"
+	"github.com/kaidong77/sensitive-lite/internal/core"
 )
 
 // ============================================================================

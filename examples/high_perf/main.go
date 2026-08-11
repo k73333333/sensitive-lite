@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"time"
 
-	sensitive "github.com/sensitive-lite/sensitive-lite"
+	sensitive "github.com/kaidong77/sensitive-lite"
 )
 
 // ============================================================================
