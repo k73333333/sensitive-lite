@@ -1,4 +1,4 @@
-package sensitive
+package core
 
 import (
 	"sort"
@@ -37,21 +37,32 @@ type childEntry struct {
 type dfaNode struct {
 	// childArr 内联子节点数组（覆盖 ≤ 4 个子节点的场景）
 	// 始终保持按 ch 升序排列，支持二分查找
+	// 当 hasMap=true 时此数组不再使用，仅 childMap 有效
 	childArr [4]childEntry
-	// childCnt 当前子节点实际数量（≤ cap(childArr) 时使用内联存储，否则用 childMap）
+	// childCnt 内联模式下的子节点实际数量（0-4）
+	// 当 hasMap=true 时此字段不再表示子节点数
 	childCnt uint32
 	// isEnd 标记当前节点是否为某个敏感词的结尾
 	isEnd bool
+	// hasMap 标记是否已迁移到 map 存储模式
+	// true 时仅使用 childMap，false 时仅使用 childArr[0:childCnt]
+	hasMap bool
 	// childMap 溢出子节点映射（仅当子节点数 > 4 时惰性初始化）
 	childMap map[rune]*dfaNode
 }
 
 // getChild 从节点中查找指定字符对应的子节点
-// 优先从内联数组二分查找，未命中则从 map 中查找
+// 根据 hasMap 标志选择内联数组（二分查找）或 map 查找
 func (n *dfaNode) getChild(ch rune) *dfaNode {
-	// 优先在内联数组中二分查找
-	if n.childCnt > 0 && n.childCnt <= uint32(len(n.childArr)) {
-		// 二分查找：childArr 始终保持升序
+	if n.hasMap {
+		// map 模式：直接从 map 中查找
+		if n.childMap != nil {
+			return n.childMap[ch]
+		}
+		return nil
+	}
+	// 内联模式：二分查找 childArr（始终保持升序）
+	if n.childCnt > 0 {
 		arr := n.childArr[:n.childCnt]
 		idx := sort.Search(int(n.childCnt), func(i int) bool {
 			return arr[i].ch >= ch
@@ -59,21 +70,20 @@ func (n *dfaNode) getChild(ch rune) *dfaNode {
 		if idx < int(n.childCnt) && arr[idx].ch == ch {
 			return arr[idx].node
 		}
-		return nil
-	}
-	// 溢出场景：从 map 中查找
-	if n.childMap != nil {
-		return n.childMap[ch]
 	}
 	return nil
 }
 
 // addChild 向节点添加子节点
-// 自动选择内联数组或 map 存储
+// 自动选择内联数组或 map 存储，内联满后触发一次性迁移到 map
 func (n *dfaNode) addChild(ch rune, node *dfaNode) {
-	// 情况 1：子节点数未达内联上限，插入内联数组并保持排序
+	// 已在 map 模式：直接写入 map
+	if n.hasMap {
+		n.childMap[ch] = node
+		return
+	}
+	// 内联模式：子节点数未达上限，插入数组并保持排序
 	if n.childCnt < uint32(len(n.childArr)) {
-		// 找到插入位置（保持升序）
 		arr := n.childArr[:n.childCnt]
 		pos := sort.Search(int(n.childCnt), func(i int) bool {
 			return arr[i].ch >= ch
@@ -84,16 +94,17 @@ func (n *dfaNode) addChild(ch rune, node *dfaNode) {
 		n.childCnt++
 		return
 	}
-	// 情况 2：刚好达到内联上限，需要迁移到 map
-	if n.childCnt == uint32(len(n.childArr)) {
-		n.childMap = make(map[rune]*dfaNode, 8)
-		for i := uint32(0); i < n.childCnt; i++ {
-			n.childMap[n.childArr[i].ch] = n.childArr[i].node
-		}
-		n.childCnt++ // 标记为 map 模式
+	// 内联已满（childCnt == len(childArr)）：一次性迁移到 map
+	n.childMap = make(map[rune]*dfaNode, 8)
+	for i := uint32(0); i < n.childCnt; i++ {
+		n.childMap[n.childArr[i].ch] = n.childArr[i].node
 	}
-	// 情况 3：已在 map 模式，直接写入
+	// 将当前新节点也加入 map
 	n.childMap[ch] = node
+	// 切换到 map 模式
+	n.hasMap = true
+	// 清零 childCnt（不再使用内联数组）
+	n.childCnt = 0
 }
 
 // ============================================================================
@@ -118,6 +129,7 @@ func releaseNode(n *dfaNode) {
 	// 重置所有字段，避免脏数据
 	n.isEnd = false
 	n.childCnt = 0
+	n.hasMap = false
 	n.childMap = nil
 	// 清零内联数组（虽然不是必须，但有助于 GC）
 	for i := range n.childArr {
@@ -135,8 +147,8 @@ func releaseNode(n *dfaNode) {
 type DFATree struct {
 	// root 根节点（虚节点，不存储字符）
 	root *dfaNode
-	// wordCount 已加载的敏感词总数
-	wordCount int
+	// WordCount 已加载的敏感词总数（导出供测试访问）
+	WordCount int
 	// nodeCount 节点总数（用于统计和调试）
 	nodeCount int
 }
@@ -182,7 +194,7 @@ func (t *DFATree) Insert(word string, maxLen int) bool {
 	// 标记词尾（避免重复计数）
 	if !current.isEnd {
 		current.isEnd = true
-		t.wordCount++
+		t.WordCount++
 	}
 	return true
 }
@@ -255,7 +267,7 @@ func (t *DFATree) Contains(text string) bool {
 
 // Stats 返回 DFA 树统计信息
 func (t *DFATree) Stats() (wordCount int, nodeCount int) {
-	return t.wordCount, t.nodeCount
+	return t.WordCount, t.nodeCount
 }
 
 // Reset 重置 DFA 树（清空全部节点）
@@ -263,23 +275,28 @@ func (t *DFATree) Stats() (wordCount int, nodeCount int) {
 func (t *DFATree) Reset() {
 	t.releaseRecursive(t.root)
 	t.root = newNode()
-	t.wordCount = 0
+	t.WordCount = 0
 	t.nodeCount = 1
 }
 
 // releaseRecursive 递归释放节点树
+// 根据 hasMap 标志选择内联数组或 map 遍历，避免双重释放
 func (t *DFATree) releaseRecursive(n *dfaNode) {
 	if n == nil {
 		return
 	}
-	// 遍历释放内联子节点
-	for i := uint32(0); i < n.childCnt && i < uint32(len(n.childArr)); i++ {
-		t.releaseRecursive(n.childArr[i].node)
-	}
-	// 遍历释放 map 子节点
-	if n.childMap != nil {
-		for _, child := range n.childMap {
-			t.releaseRecursive(child)
+	// 根据存储模式只遍历一种子节点集合
+	if n.hasMap {
+		// map 模式：仅遍历 childMap
+		if n.childMap != nil {
+			for _, child := range n.childMap {
+				t.releaseRecursive(child)
+			}
+		}
+	} else {
+		// 内联模式：仅遍历 childArr[0:childCnt]
+		for i := uint32(0); i < n.childCnt; i++ {
+			t.releaseRecursive(n.childArr[i].node)
 		}
 	}
 	releaseNode(n)

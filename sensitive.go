@@ -1,8 +1,12 @@
 package sensitive
 
 import (
+	"fmt"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/sensitive-lite/sensitive-lite/internal/core"
 )
 
 // ============================================================================
@@ -25,18 +29,27 @@ import (
 type Filter struct {
 	// dfa 核心 DFA 匹配引擎
 	// 当启用反清洗时存储标准化后的敏感词；否则存储原始敏感词
-	dfa *DFATree
+	dfa *core.DFATree
 	// normalizer 文本标准化器
-	normalizer *Normalizer
+	normalizer *core.Normalizer
 	// normToOrig 标准化词 → 原始词的映射（用于结果报告时还原原始敏感词）
 	normToOrig map[string]string
 	// opts 过滤器配置
 	opts *options
 	// wordMap 原始敏感词集合（用于懒加载场景暂存词库）
 	wordMap map[string]struct{}
+	// logger 日志器（nil 时使用 noopLogger 零开销默认实现）
+	logger Logger
 	// built 标记 DFA 是否已构建完成
 	built   bool
 	builtMu sync.RWMutex
+	// degraded 标记是否已降级（关闭反清洗）
+	degraded   bool
+	degradedMu sync.RWMutex
+	// statsMu 统计字段保护锁
+	statsMu sync.RWMutex
+	// totalMatches 累计匹配次数（用于监控统计）
+	totalMatches int64
 }
 
 // New 创建敏感词过滤器实例
@@ -62,11 +75,31 @@ func New(words []string, optFns ...Option) *Filter {
 	}
 
 	f := &Filter{
-		normalizer: NewNormalizer(),
+		normalizer: core.NewNormalizer(core.NormalizerConfig{
+			EnableLeet:            opts.enableLeetSpeak,
+			EnableCJKInterstitial: true,
+			EnableDedup:           opts.enableDedup,
+		}),
 		opts:       opts,
 		wordMap:    make(map[string]struct{}, len(words)),
 		normToOrig: make(map[string]string, len(words)),
 	}
+
+	// 初始化日志器：优先使用自定义 Logger
+	if opts.logger != nil {
+		f.logger = opts.logger
+	} else if opts.logLevel >= LogLevelOff {
+		// 用户显式关闭日志时使用 noopLogger（零开销）
+		f.logger = &noopLogger{}
+	} else {
+		// 未注入自定义 Logger 且未关闭日志时，创建基于标准库的默认日志器
+		defaultLog := newDefaultLogger()
+		defaultLog.SetLogLevel(opts.logLevel)
+		f.logger = defaultLog
+	}
+
+	f.logger.Debug("创建过滤器: 词库数量=%d, 反清洗=%v, 懒加载=%v",
+		len(words), opts.enableFuzzy, opts.lazyBuild)
 
 	// 懒加载模式：延迟到首次过滤调用时才构建 DFA
 	if !opts.lazyBuild {
@@ -87,9 +120,10 @@ func New(words []string, optFns ...Option) *Filter {
 // build 构建 DFA 匹配引擎
 //
 // 架构说明：
-//  单 DFA 设计 — 启用反清洗时直接将敏感词标准化后存入 DFA，
-//  匹配时将输入文本同步标准化后匹配。避免了双 DFA 的内存翻倍问题。
-//  关闭反清洗时直接使用原始词构建 DFA。
+//
+//	单 DFA 设计 — 启用反清洗时直接将敏感词标准化后存入 DFA，
+//	匹配时将输入文本同步标准化后匹配。避免了双 DFA 的内存翻倍问题。
+//	关闭反清洗时直接使用原始词构建 DFA。
 func (f *Filter) build(words []string) {
 	f.builtMu.Lock()
 	defer f.builtMu.Unlock()
@@ -98,7 +132,7 @@ func (f *Filter) build(words []string) {
 		return
 	}
 
-	f.dfa = NewDFATree()
+	f.dfa = core.NewDFATree()
 
 	for _, w := range words {
 		// 跳过空词
@@ -154,7 +188,7 @@ func (f *Filter) ensureBuilt() {
 	f.wordMap = nil
 
 	// 构建 DFA
-	f.dfa = NewDFATree()
+	f.dfa = core.NewDFATree()
 	for _, w := range words {
 		w = strings.TrimSpace(w)
 		if w == "" {
@@ -193,8 +227,9 @@ func (f *Filter) ensureBuilt() {
 //
 // 匹配策略：
 //  1. 若启用反清洗，先标准化输入文本再匹配 DFA
-//  2. 若关闭反清洗，直接匹配原始文本
+//  2. 若关闭反清洗或已降级，直接匹配原始文本
 //  3. 通过位置映射将匹配结果还原到原始文本位置
+//  4. 每次操作若配置了溯源回调，异步记录审计日志
 func (f *Filter) FindAll(text string) []MatchResult {
 	f.ensureBuilt()
 
@@ -202,10 +237,52 @@ func (f *Filter) FindAll(text string) []MatchResult {
 		return nil
 	}
 
-	if f.opts.enableFuzzy {
-		return f.fuzzyFindAll(text)
+	// 溯源记录起始时间
+	startTime := time.Now()
+	var results []MatchResult
+
+	// 降级检查：若反清洗模式被降级，回退到精确匹配
+	if f.opts.enableFuzzy && f.isDegraded() {
+		f.logger.Warn("反清洗已降级，回退到精确匹配模式")
+		results = f.exactFindAll(text)
+	} else if f.opts.enableFuzzy {
+		results = f.fuzzyFindAll(text)
+	} else {
+		results = f.exactFindAll(text)
 	}
-	return f.exactFindAll(text)
+
+	duration := time.Since(startTime)
+
+	// 降级检测：单次匹配耗时超过阈值时触发告警
+	if f.opts.degradeConfig.MaxMatchDuration > 0 &&
+		duration.Milliseconds() > int64(f.opts.degradeConfig.MaxMatchDuration) {
+		f.logger.Warn("匹配耗时超阈值: %dms > %dms, 文本长度=%d",
+			duration.Milliseconds(), f.opts.degradeConfig.MaxMatchDuration, len(text))
+
+		// 触发性能告警回调
+		if f.opts.alertCallback != nil {
+			f.opts.alertCallback(AlertRecord{
+				Timestamp: time.Now(),
+				Level:     AlertLevelWarn,
+				Title:     "匹配耗时超阈值",
+				Message: fmt.Sprintf("单次匹配耗时 %dms 超过阈值 %dms，文本长度=%d，命中数=%d",
+					duration.Milliseconds(), f.opts.degradeConfig.MaxMatchDuration, len(text), len(results)),
+				IsDegraded: f.isDegraded(),
+			})
+		}
+	}
+
+	// 记录溯源日志
+	if f.opts.traceCallback != nil {
+		f.recordTrace(text, results, duration)
+	}
+
+	// 更新统计
+	f.statsMu.Lock()
+	f.totalMatches += int64(len(results))
+	f.statsMu.Unlock()
+
+	return results
 }
 
 // exactFindAll 精确匹配模式：在原始文本中直接匹配 DFA
@@ -236,6 +313,7 @@ func (f *Filter) exactFindAll(text string) []MatchResult {
 }
 
 // fuzzyFindAll 反清洗匹配模式：标准化输入文本后匹配 DFA，再还原位置
+// 修复：支持同一敏感词在文本中多次出现时的位置正确还原
 func (f *Filter) fuzzyFindAll(text string) []MatchResult {
 	// 步骤 1：标准化输入文本（带位置映射）
 	normalized := f.normalizer.Normalize(text)
@@ -247,49 +325,64 @@ func (f *Filter) fuzzyFindAll(text string) []MatchResult {
 	rawMatches := f.dfa.Match(normalized.Text, normalized.Runes)
 
 	results := make([]MatchResult, 0, len(rawMatches))
+	// seenByWord 按"词+原始字节位置"去重，而非仅按词去重，
+	// 确保同一敏感词在不同位置多次出现时均被记录
 	seen := make(map[string]struct{})
 
-	for _, word := range rawMatches {
-		if _, ok := seen[word]; ok {
-			continue
-		}
-		seen[word] = struct{}{}
-
+	for _, dfaWord := range rawMatches {
 		// 步骤 3：还原匹配词到原始敏感词（通过 normToOrig 映射）
-		originalWord := word
-		if orig, ok := f.normToOrig[word]; ok {
+		originalWord := dfaWord
+		if orig, ok := f.normToOrig[dfaWord]; ok {
 			originalWord = orig
 		}
 
-		// 步骤 4：在标准化文本中定位，再映射回原始文本位置
-		normIdx := strings.Index(normalized.Text, word)
-		if normIdx < 0 {
-			continue
-		}
+		wordRuneLen := len([]rune(dfaWord))
 
-		normRuneIdx := byteOffsetToRuneIndex(normalized.Text, normIdx)
-		wordRuneLen := len([]rune(word))
+		// 步骤 4：在标准化文本中查找所有出现位置（非仅首次）
+		// 遍历所有非重叠出现，逐一映射回原始文本位置
+		searchFrom := 0
+		for {
+			normIdx := strings.Index(normalized.Text[searchFrom:], dfaWord)
+			if normIdx < 0 {
+				break
+			}
+			absNormIdx := searchFrom + normIdx
 
-		// 通过位置映射还原原始字节偏移
-		if normRuneIdx < len(normalized.PosMap) {
+			// 计算标准化 rune 索引
+			normRuneIdx := byteOffsetToRuneIndex(normalized.Text, absNormIdx)
+			if normRuneIdx >= len(normalized.PosMap) {
+				searchFrom = absNormIdx + 1
+				continue
+			}
+
+			// 通过位置映射还原原始字节偏移
 			startByte := normalized.PosMap[normRuneIdx]
-
-			// 计算结束字节偏移
 			endByte := f.calcEndByte(normalized, normRuneIdx, wordRuneLen, len(text))
 
-			results = append(results, MatchResult{
-				Word:  originalWord,
-				Start: startByte,
-				End:   endByte,
-				Type:  MatchFuzzy,
-			})
+			// 去重 key：词内容 + 原始起始字节位置
+			key := originalWord + "|" + itoa(startByte)
+			if _, ok := seen[key]; !ok {
+				seen[key] = struct{}{}
+				results = append(results, MatchResult{
+					Word:  originalWord,
+					Start: startByte,
+					End:   endByte,
+					Type:  MatchFuzzy,
+				})
+			}
+
+			// 移动到下一个可能位置（跳过已匹配区间）
+			searchFrom = absNormIdx + len(dfaWord)
+			if searchFrom >= len(normalized.Text) {
+				break
+			}
 		}
 	}
 	return results
 }
 
 // calcEndByte 计算匹配区间在原始文本中的结束字节偏移
-func (f *Filter) calcEndByte(norm *NormalizedText, normStart, wordRuneLen, textLen int) int {
+func (f *Filter) calcEndByte(norm *core.NormalizedText, normStart, wordRuneLen, textLen int) int {
 	endNormRune := normStart + wordRuneLen - 1
 	if endNormRune >= len(norm.PosMap) {
 		return textLen
@@ -307,7 +400,7 @@ func (f *Filter) calcEndByte(norm *NormalizedText, normStart, wordRuneLen, textL
 
 	if origRuneIdx >= 0 && origRuneIdx < len(norm.OrigRunes) {
 		// 原始 rune 的字节开始 + 该 rune 的字节长度 = 结束字节偏移
-		return norm.OrigBytePos[origRuneIdx] + runeByteLen(norm.OrigRunes[origRuneIdx])
+		return norm.OrigBytePos[origRuneIdx] + core.RuneByteLen(norm.OrigRunes[origRuneIdx])
 	}
 	return textLen
 }
@@ -385,8 +478,190 @@ func (f *Filter) Stats() map[string]int {
 }
 
 // ============================================================================
+// 降级策略 — 系统资源紧张时自动降级保障核心服务
+// ============================================================================
+
+// Degrade 手动触发降级（关闭反清洗，仅保留精确匹配）
+// 用于运维人员在系统资源紧张时主动降级
+func (f *Filter) Degrade() {
+	f.degradedMu.Lock()
+	alreadyDegraded := f.degraded
+	if !f.degraded {
+		f.degraded = true
+	}
+	f.degradedMu.Unlock()
+
+	if !alreadyDegraded {
+		f.logger.Warn("反清洗功能已降级，当前仅支持精确匹配")
+
+		// 触发告警回调（通知外部告警系统）
+		if f.opts.alertCallback != nil {
+			f.opts.alertCallback(AlertRecord{
+				Timestamp:  time.Now(),
+				Level:      AlertLevelCritical,
+				Title:      "反清洗功能已降级",
+				Message:    "系统触发降级，反清洗功能已关闭，当前仅支持精确匹配。请检查系统资源状态。",
+				IsDegraded: true,
+			})
+		}
+	}
+}
+
+// Recover 从降级状态恢复（重新启用反清洗）
+func (f *Filter) Recover() {
+	f.degradedMu.Lock()
+	defer f.degradedMu.Unlock()
+	if f.degraded {
+		f.degraded = false
+		f.logger.Info("反清洗功能已从降级状态恢复")
+	}
+}
+
+// isDegraded 检查是否处于降级状态
+func (f *Filter) isDegraded() bool {
+	f.degradedMu.RLock()
+	defer f.degradedMu.RUnlock()
+	return f.degraded
+}
+
+// CheckMemoryAndDegrade 检查内存使用并在超阈值时自动降级
+// 传入当前系统可用内存（MB），若低于配置阈值则触发降级
+func (f *Filter) CheckMemoryAndDegrade(availableMemMB int) {
+	cfg := f.opts.degradeConfig
+	if cfg.MaxMemoryMB > 0 && availableMemMB < cfg.MaxMemoryMB {
+		f.Degrade()
+		f.logger.Warn("内存不足触发自动降级: 可用=%dMB < 阈值=%dMB",
+			availableMemMB, cfg.MaxMemoryMB)
+	}
+}
+
+// ============================================================================
+// 溯源追踪 — 审计日志记录
+// ============================================================================
+
+// recordTrace 记录单次过滤操作的溯源日志
+func (f *Filter) recordTrace(text string, matches []MatchResult, duration time.Duration) {
+	// 构建匹配词列表（最多保留前 3 个用于审计）
+	matchWords := make([]string, 0, 3)
+	for i, m := range matches {
+		if i >= 3 {
+			break
+		}
+		matchWords = append(matchWords, m.Word)
+	}
+
+	record := TraceRecord{
+		Timestamp:  time.Now(),
+		TextHash:   hashText(text),
+		TextLen:    len(text),
+		MatchCount: len(matches),
+		MatchWords: matchWords,
+		Duration:   duration,
+	}
+
+	// 回调在调用 goroutine 中同步执行，避免异步复杂性
+	// 调用方应确保回调函数轻量（不阻塞过滤流程）
+	f.opts.traceCallback(record)
+}
+
+// ============================================================================
+// 监控统计 API
+// ============================================================================
+
+// TotalMatches 返回累计过滤命中次数
+func (f *Filter) TotalMatches() int64 {
+	f.statsMu.RLock()
+	defer f.statsMu.RUnlock()
+	return f.totalMatches
+}
+
+// ============================================================================
+// 批量匹配 API — 高并发场景性能优化
+// ============================================================================
+
+// FindAllBatch 批量查找多个文本中的敏感词
+//
+// 适用场景：消息队列批量消费、数据库批量扫描等需要同时检测多条文本的场景
+// 相比逐个调用 FindAll，可以共享同一个过滤器实例，减少上下文切换开销
+//
+// 参数：
+//
+//	texts - 待检测文本列表
+//
+// 返回值：每条文本对应的匹配结果列表（顺序与输入一致）
+func (f *Filter) FindAllBatch(texts []string) [][]MatchResult {
+	f.ensureBuilt()
+
+	if len(texts) == 0 {
+		return nil
+	}
+
+	results := make([][]MatchResult, len(texts))
+	for i, text := range texts {
+		if text == "" {
+			results[i] = nil
+			continue
+		}
+
+		// 复用 FindAll 的单文本检测逻辑
+		// 共享同一个 f 实例的 DFA 和 normalizer，利用 CPU 缓存命中
+		results[i] = f.FindAll(text)
+	}
+	return results
+}
+
+// WordsSnapshot 导出当前活跃敏感词快照
+//
+// 用途：数据备份、审计合规、词库版本比对
+// 注意：返回的是词库快照副本，修改返回切片不影响过滤器内部状态
+//
+// 返回值：当前敏感词列表（按原始词形式返回）
+func (f *Filter) WordsSnapshot() []string {
+	f.ensureBuilt()
+
+	// 收集所有原始敏感词
+	words := make([]string, 0, len(f.normToOrig))
+	if len(f.normToOrig) > 0 {
+		// 反清洗模式：从 normToOrig 映射还原原始词
+		for _, orig := range f.normToOrig {
+			words = append(words, orig)
+		}
+	} else if f.dfa != nil {
+		// 精确匹配模式：DFA 中存储的就是原始词
+		// 无法从 DFA 直接提取词列表，返回空切片
+		// 如需精确模式的词库快照，请在 New() 时自行保留词库引用
+		f.logger.Debug("精确匹配模式下无法导出完整词库快照，返回空列表")
+	}
+
+	return words
+}
+
+// ============================================================================
 // 内部辅助函数
 // ============================================================================
+
+// itoa 简易整数转字符串（避免 fmt.Sprintf 的开销，用于构建去重 key）
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
+}
 
 // byteOffsetToRuneIndex 将字节偏移转换为 rune 索引
 func byteOffsetToRuneIndex(s string, byteOff int) int {

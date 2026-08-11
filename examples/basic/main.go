@@ -50,5 +50,6 @@ func main() {
 
 	// 步骤 4：查看统计信息
 	stats := filter.Stats()
-	fmt.Printf("DFA 统计: 词数=%d, 节点数=%d\n", stats["exact_words"], stats["exact_nodes"])
+	fmt.Printf("DFA 统计: 词数=%d, 节点数=%d, 原始词数=%d\n",
+		stats["words"], stats["nodes"], stats["original_words"])
 }

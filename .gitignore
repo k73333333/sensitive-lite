@@ -7,9 +7,8 @@
 *.test
 *.out
 
-# Go 依赖
+# Go 依赖（仅供内部开发用，库项目应提交 go.sum）
 vendor/
-go.sum
 
 # IDE
 .idea/
@@ -25,3 +24,7 @@ Thumbs.db
 # 临时文件
 tmp/
 temp/
+
+# 文档 / 本地配置（不随核心代码发布）
+doc/
+*.local.*
