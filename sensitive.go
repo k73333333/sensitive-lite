@@ -286,34 +286,47 @@ func (f *Filter) FindAll(text string) []MatchResult {
 }
 
 // exactFindAll 精确匹配模式：在原始文本中直接匹配 DFA
+//
+// v3.2 优化：使用 MatchAll 直接获取 rune 位置，预计算字节偏移表，
+// 消除原来按词逐个 strings.Index 的 O(K×N) 二次扫描开销。
 func (f *Filter) exactFindAll(text string) []MatchResult {
-	rawMatches := f.dfa.Match(text, nil)
+	textRunes := []rune(text)
+	matches := f.dfa.MatchAll(text, textRunes)
 
-	results := make([]MatchResult, 0, len(rawMatches))
-	seen := make(map[string]struct{})
+	// 预计算 rune 索引 → 字节偏移映射表（O(N) 一次性计算，后续 O(1) 查询）
+	byteOffsets := make([]int, len(textRunes)+1)
+	off := 0
+	for i, r := range textRunes {
+		byteOffsets[i] = off
+		off += core.RuneByteLen(r)
+	}
+	byteOffsets[len(textRunes)] = off // 文本末尾字节偏移
 
-	for _, word := range rawMatches {
-		if _, ok := seen[word]; ok {
+	results := make([]MatchResult, 0, len(matches))
+	seen := make(map[string]struct{}) // 按词去重，保留每个词首次出现
+
+	for _, m := range matches {
+		if _, ok := seen[m.Word]; ok {
 			continue
 		}
-		seen[word] = struct{}{}
+		seen[m.Word] = struct{}{}
 
-		// 在原始文本中定位该敏感词
-		idx := strings.Index(text, word)
-		if idx >= 0 {
-			results = append(results, MatchResult{
-				Word:  word,
-				Start: idx,
-				End:   idx + len(word),
-				Type:  MatchExact,
-			})
-		}
+		// EndRune 是含的，End 是排他的，所以取 EndRune+1 位置的字节偏移
+		results = append(results, MatchResult{
+			Word:  m.Word,
+			Start: byteOffsets[m.StartRune],
+			End:   byteOffsets[m.EndRune+1],
+			Type:  MatchExact,
+		})
 	}
 	return results
 }
 
 // fuzzyFindAll 反清洗匹配模式：标准化输入文本后匹配 DFA，再还原位置
-// 修复：支持同一敏感词在文本中多次出现时的位置正确还原
+//
+// v3.2 优化：使用 MatchAll 直接获取匹配在标准化文本中的 rune 位置，
+// 通过 PosMap 映射回原始文本字节偏移，消除原来 strings.Index 循环搜索。
+// 原来对每个匹配词执行 while 循环 strings.Index 的 O(K×N) 开销完全消除。
 func (f *Filter) fuzzyFindAll(text string) []MatchResult {
 	// 步骤 1：标准化输入文本（带位置映射）
 	normalized := f.normalizer.Normalize(text)
@@ -321,61 +334,40 @@ func (f *Filter) fuzzyFindAll(text string) []MatchResult {
 		return nil
 	}
 
-	// 步骤 2：在标准化文本上执行 DFA 多模式匹配
-	rawMatches := f.dfa.Match(normalized.Text, normalized.Runes)
+	// 步骤 2：位置感知的 DFA 多模式匹配（直接返回 rune 位置）
+	matches := f.dfa.MatchAll(normalized.Text, normalized.Runes)
 
-	results := make([]MatchResult, 0, len(rawMatches))
-	// seenByWord 按"词+原始字节位置"去重，而非仅按词去重，
-	// 确保同一敏感词在不同位置多次出现时均被记录
+	results := make([]MatchResult, 0, len(matches))
+	// 按 (原始词 + 原始起始字节偏移) 去重，确保同一敏感词在不同位置均被记录
 	seen := make(map[string]struct{})
 
-	for _, dfaWord := range rawMatches {
+	for _, m := range matches {
 		// 步骤 3：还原匹配词到原始敏感词（通过 normToOrig 映射）
-		originalWord := dfaWord
-		if orig, ok := f.normToOrig[dfaWord]; ok {
+		originalWord := m.Word
+		if orig, ok := f.normToOrig[m.Word]; ok {
 			originalWord = orig
 		}
 
-		wordRuneLen := len([]rune(dfaWord))
+		// 步骤 4：直接通过 PosMap 获取原始文本字节偏移（无需 strings.Index 扫描）
+		if m.StartRune >= len(normalized.PosMap) {
+			continue
+		}
+		startByte := normalized.PosMap[m.StartRune]
 
-		// 步骤 4：在标准化文本中查找所有出现位置（非仅首次）
-		// 遍历所有非重叠出现，逐一映射回原始文本位置
-		searchFrom := 0
-		for {
-			normIdx := strings.Index(normalized.Text[searchFrom:], dfaWord)
-			if normIdx < 0 {
-				break
-			}
-			absNormIdx := searchFrom + normIdx
+		// 计算匹配区间在原始文本中的结束字节偏移
+		wordRuneLen := m.EndRune - m.StartRune + 1
+		endByte := f.calcEndByte(normalized, m.StartRune, wordRuneLen, len(text))
 
-			// 计算标准化 rune 索引
-			normRuneIdx := byteOffsetToRuneIndex(normalized.Text, absNormIdx)
-			if normRuneIdx >= len(normalized.PosMap) {
-				searchFrom = absNormIdx + 1
-				continue
-			}
-
-			// 通过位置映射还原原始字节偏移
-			startByte := normalized.PosMap[normRuneIdx]
-			endByte := f.calcEndByte(normalized, normRuneIdx, wordRuneLen, len(text))
-
-			// 去重 key：词内容 + 原始起始字节位置
-			key := originalWord + "|" + itoa(startByte)
-			if _, ok := seen[key]; !ok {
-				seen[key] = struct{}{}
-				results = append(results, MatchResult{
-					Word:  originalWord,
-					Start: startByte,
-					End:   endByte,
-					Type:  MatchFuzzy,
-				})
-			}
-
-			// 移动到下一个可能位置（跳过已匹配区间）
-			searchFrom = absNormIdx + len(dfaWord)
-			if searchFrom >= len(normalized.Text) {
-				break
-			}
+		// 去重 key：词内容 + 原始起始字节位置
+		key := originalWord + "|" + itoa(startByte)
+		if _, ok := seen[key]; !ok {
+			seen[key] = struct{}{}
+			results = append(results, MatchResult{
+				Word:  originalWord,
+				Start: startByte,
+				End:   endByte,
+				Type:  MatchFuzzy,
+			})
 		}
 	}
 	return results
@@ -524,13 +516,33 @@ func (f *Filter) isDegraded() bool {
 	return f.degraded
 }
 
-// CheckMemoryAndDegrade 检查内存使用并在超阈值时自动降级
-// 传入当前系统可用内存（MB），若低于配置阈值则触发降级
+// CheckMemoryAndDegrade 检查内存使用并自动降级/恢复
+//
+// 传入当前系统可用内存（MB）：
+//   - 低于 MaxMemoryMB 阈值时自动触发降级（关闭反清洗）
+//   - 恢复到阈值以上时自动恢复反清洗功能
+//   - MaxMemoryMB 为 0 时不执行任何自动操作（关闭自动降级）
+//
+// 手动 Degrade()/Recover() 不受影响，始终生效。
 func (f *Filter) CheckMemoryAndDegrade(availableMemMB int) {
 	cfg := f.opts.degradeConfig
-	if cfg.MaxMemoryMB > 0 && availableMemMB < cfg.MaxMemoryMB {
+	// 阈值未配置（0）时不触发任何自动操作
+	if cfg.MaxMemoryMB <= 0 {
+		return
+	}
+
+	// 内存不足 → 自动降级
+	if availableMemMB < cfg.MaxMemoryMB {
 		f.Degrade()
 		f.logger.Warn("内存不足触发自动降级: 可用=%dMB < 阈值=%dMB",
+			availableMemMB, cfg.MaxMemoryMB)
+		return
+	}
+
+	// 内存恢复 → 自动恢复（仅在之前因自动降级触发的情况下）
+	if f.isDegraded() {
+		f.Recover()
+		f.logger.Info("内存恢复，自动恢复反清洗: 可用=%dMB >= 阈值=%dMB",
 			availableMemMB, cfg.MaxMemoryMB)
 	}
 }

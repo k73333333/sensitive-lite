@@ -742,9 +742,9 @@ func TestDegradeAndRecover(t *testing.T) {
 	}
 }
 
-// TestCheckMemoryAndDegrade 测试自动内存降级
+// TestCheckMemoryAndDegrade 测试自动内存降级与恢复
 func TestCheckMemoryAndDegrade(t *testing.T) {
-	// 设置降级配置：剩余内存低于 256MB 时触发降级
+	// MaxMemoryMB=256：可用内存低于 256MB 时触发降级
 	f := New([]string{"测试"}, WithDegradeConfig(DegradeConfig{MaxMemoryMB: 256}))
 
 	// 内存充足时不应触发降级
@@ -757,6 +757,19 @@ func TestCheckMemoryAndDegrade(t *testing.T) {
 	f.CheckMemoryAndDegrade(128)
 	if !f.isDegraded() {
 		t.Fatal("内存不足时应触发降级")
+	}
+
+	// 内存恢复后自动恢复（512MB >= 256MB 阈值）
+	f.CheckMemoryAndDegrade(512)
+	if f.isDegraded() {
+		t.Fatal("内存恢复后应自动恢复反清洗")
+	}
+
+	// MaxMemoryMB=0：不启用自动降级
+	f2 := New([]string{"测试"}, WithDegradeConfig(DegradeConfig{MaxMemoryMB: 0}))
+	f2.CheckMemoryAndDegrade(128)
+	if f2.isDegraded() {
+		t.Fatal("MaxMemoryMB=0 时不应触发自动降级")
 	}
 }
 
@@ -1752,9 +1765,9 @@ func TestNormalizerConfigDefaults(t *testing.T) {
 	}
 
 	n2 := core.NewNormalizer(core.NormalizerConfig{
-		EnableLeet:             true,
-		EnableCJKInterstitial:  true,
-		EnableDedup:            true,
+		EnableLeet:            true,
+		EnableCJKInterstitial: true,
+		EnableDedup:           true,
 	})
 	if !n2.EnableDedup {
 		t.Error("全开配置下 Dedup 应为开启")
@@ -1828,13 +1841,13 @@ func TestConfusableLatinAccented(t *testing.T) {
 		desc     string
 	}{
 		// 重音变体测试
-		{"caf\u00e9", "cafe", "cafe(é)"},                         // cafe + 重音
-		{"r\u00e9sum\u00e9", "resume", "resume(全重音)"},         // resume 带重音
-		{"na\u00efve", "naive", "naive(分音符)"},                  // naive 带分音
-		{"dej\u00e0", "deja", "deja(重音符)"},                     // deja + à
+		{"caf\u00e9", "cafe", "cafe(é)"},              // cafe + 重音
+		{"r\u00e9sum\u00e9", "resume", "resume(全重音)"}, // resume 带重音
+		{"na\u00efve", "naive", "naive(分音符)"},         // naive 带分音
+		{"dej\u00e0", "deja", "deja(重音符)"},            // deja + à
 		// 北欧/德语字符
-		{"sm\u00f8r", "smor", "smor(ø→o)"},                       // 北欧 ø
-		{"gro\u00df", "gros", "gros(ß→s)"},                       // 德语 ß → s
+		{"sm\u00f8r", "smor", "smor(ø→o)"}, // 北欧 ø
+		{"gro\u00df", "gros", "gros(ß→s)"}, // 德语 ß → s
 		// 多重重音（不含标准 ASCII 字符，仅测试重音变体映射）
 		{"f\u00e2\u00e7\u00e3d\u00eb", "facade", "facade(多重音)"},
 	}
@@ -1903,7 +1916,7 @@ func TestConfusableCyrillicHomoglyphs(t *testing.T) {
 		expected string
 		desc     string
 	}{
-		// 西里尔小写混淆 "неllо" — н→h, е→e, о→o 
+		// 西里尔小写混淆 "неllо" — н→h, е→e, о→o
 		{
 			"\u043D\u0435ll\u043E",
 			"hello", "西里尔小写 н+е+о 混淆",

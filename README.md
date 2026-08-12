@@ -57,7 +57,7 @@ func main() {
 | `Degrade` | `Degrade()` | 手动触发降级（关闭反清洗） |
 | `Recover` | `Recover()` | 从降级恢复反清洗功能 |
 | `TotalMatches` | `TotalMatches() int64` | 累计命中次数 |
-| `CheckMemoryAndDegrade` | `CheckMemoryAndDegrade(availableMemMB int)` | 内存不足时自动降级 |
+| `CheckMemoryAndDegrade` | `CheckMemoryAndDegrade(availableMemMB int)` | 内存低时自动降级，恢复后自动恢复 |
 
 ### MatchResult 类型
 
@@ -103,16 +103,16 @@ type Logger interface {
 // 配置降级策略用于生产环境自动容灾
 filter := sensitive.New(words,
     sensitive.WithDegradeConfig(sensitive.DegradeConfig{
-        MaxMemoryMB:      256,   // 可用内存低于此值时自动降级
-        FallbackToExact:  true,  // 降级后回退到精确匹配
-        MaxMatchDuration: 100,   // 单次匹配超 100ms 触发告警
+        MaxMemoryMB:      256,    // 可用内存低于此值时触发降级，0=关闭自动降级
+        FallbackToExact:  true,   // 降级后回退到精确匹配
+        MaxMatchDuration: 100,    // 单次匹配超 100ms 触发告警
     }),
 )
 
-// 业务侧定期检查内存触发自动降级
+// 业务侧定期检查内存，低于阈值自动降级，恢复后自动恢复
 filter.CheckMemoryAndDegrade(getAvailableMemory())
 
-// 手动降级/恢复
+// 手动降级/恢复（不受 MaxMemoryMB 影响，始终生效）
 filter.Degrade()
 filter.Recover()
 ```
@@ -193,23 +193,29 @@ filter := sensitive.New(words,
 
 ## 性能基准
 
-### 内存占用（10 万词，含反清洗）
+> 测试环境：Intel i7-12800HX, Go 1.22, 启用反清洗 + AC 失效链接
 
-| 指标 | 数值 |
-|------|------|
-| DFA 构建内存增量 | ~33.7 MB |
-| 总运行时内存 | ~40 MB |
-| 较传统 map DFA 节省 | ~42% |
-| 低内存场景（256MB） | 10 并发 1000 次无 OOM |
+### 内存占用（v3.2，含反清洗全量开销）
+
+| 词库规模 | 实际词数 | DFA 节点数 | 分配内存 | 每万词 |
+|---------|----------|-----------|---------|--------|
+| 6 万    | 58,001   | 154,159   | 31.94 MB | 5.32 MB |
+| 10 万   | 99,001   | 298,005   | 50.92 MB | 5.09 MB |
+| 14 万   | 136,441  | 363,786   | 76.06 MB | 5.43 MB |
+
+> v3.2 每节点新增 failLink(8B) + depth(2B) + asciiKids指针(8B) ≈ 18B，占总量 ~10%
+> 纯中文节点 asciiKids 数组不分配（nil），零额外开销
 
 ### 操作性能（10,000 词库）
 
-| 操作 | 吞吐量 | 说明 |
-|------|--------|------|
-| FindAll（精确） | ~117,000 ops/s | 纯 DFA 匹配 |
-| FindAll（反清洗） | ~83,000 ops/s | 含文本标准化 |
-| Contains | ~238,000 ops/s | 命中即返回 |
-| FindAll（100并发） | ~285,000 ops/s | 无锁并发 |
+| 操作 | 吞吐量 | 延迟 | 内存/次 | 说明 |
+|------|--------|------|---------|------|
+| FindAll（精确） | ~45,000 ops/s | 22.1 µs | 13.2 KB | DFA 匹配 + 位置还原 |
+| FindAll（反清洗） | ~38,000 ops/s | 26.1 µs | 7.5 KB | 含 11 步标准化管道 |
+| Replace | ~94,000 ops/s | 10.7 µs | 4.2 KB | 查找 + 替换 |
+| Contains | ~311,000 ops/s | 3.2 µs | 1.4 KB | 命中即返回 |
+| Contains（并发） | ~2,300,000 ops/s | 434 ns | 1.4 KB | 无锁并发读取 |
+| FindAll（并发） | ~279,000 ops/s | 3.6 µs | 9.6 KB | 24 核并行 |
 
 ### 准确率
 

@@ -229,9 +229,11 @@ func TestMemoryUsage(t *testing.T) {
 	t.Logf("10万敏感词内存分配: %.2f MB", allocMB)
 	t.Logf("DFA 统计: %+v", f.Stats())
 
-	// 单 DFA 架构约 25-35MB，设置 40MB 上限
-	if allocMB > 40 {
-		t.Errorf("内存占用过高: %.2f MB (期望 < 40 MB)", allocMB)
+	// v3.2: failLink(8B) + depth(2B) + asciiKids指针(8B) = 每节点 +18B
+	// 30 万节点约增 5.4 MB（~12%），用空间换 AC 线性匹配和 ASCII O(1) 查找
+	// 纯中文节点 asciiKids 保持 nil 零开销，混合节点惰性分配 1KB 数组
+	if allocMB > 55 {
+		t.Errorf("内存占用过高: %.2f MB (期望 < 55 MB, v3.2 优化上浮 ~5MB)", allocMB)
 	}
 }
 
@@ -435,6 +437,132 @@ func generateTestText(length int, words []string) string {
 				sb.WriteRune(baseChars[rng.Intn(len(baseChars))])
 			}
 		}
+	}
+	return sb.String()
+}
+
+// ============================================================================
+// v3.2 优化针对性基准测试
+// ============================================================================
+
+// BenchmarkASCIIDirectIndex 验证 asciiKids O(1) 直接索引优化的收益
+// 场景：敏感词和输入均含大量 ASCII 字符（confusable 映射后的典型输入）
+func BenchmarkASCIIDirectIndex(b *testing.B) {
+	// 构造 2000 个 ASCII 敏感词 + 2000 个中文敏感词混合词库
+	words := make([]string, 0, 4000)
+	for i := 0; i < 2000; i++ {
+		words = append(words, genASCIIWord(i, 4))
+	}
+	for i := 0; i < 2000; i++ {
+		words = append(words, genChineseWord(i, 3))
+	}
+
+	f := New(words, WithFuzzy(false))
+	// 构造 ASCII 为主的测试文本（模拟 confusable 映射后的输出）
+	text := strings.Repeat("abc def ghi jkl mno pqr stu vwx yz ", 20)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		f.FindAll(text)
+	}
+}
+
+// BenchmarkMatchACDeep 深层词库场景下 AC 优势验证
+// 词深 8-15 字符时原滑动窗口 O(N×L) 开销显著，AC O(N) 加速明显
+func BenchmarkMatchACDeep(b *testing.B) {
+	for _, wordLen := range []int{6, 10, 15} {
+		b.Run(fmt.Sprintf("Depth=%d", wordLen), func(b *testing.B) {
+			// 构造 3000 个固定深度的词 + 3000 个短词
+			words := make([]string, 0, 6000)
+			for i := 0; i < 3000; i++ {
+				words = append(words, genASCIIWord(i, wordLen))
+			}
+			for i := 0; i < 3000; i++ {
+				words = append(words, genChineseWord(i, 3))
+			}
+
+			tree := core.NewDFATree()
+			for _, w := range words {
+				tree.Insert(w, 0)
+			}
+			tree.BuildFailureLinks()
+
+			// 构造能触发深度匹配的文本
+			text := strings.Repeat("abcdefghijklmnopqrstuvwxyz", 30)
+			textRunes := []rune(text)
+
+			b.Run("Match(O(N×L))", func(b *testing.B) {
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					_ = tree.Match(text, textRunes)
+				}
+			})
+
+			b.Run("MatchAC(O(N))", func(b *testing.B) {
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					_ = tree.MatchAC(textRunes)
+				}
+			})
+		})
+	}
+}
+
+// BenchmarkMatchAC 对比原 Match (O(N×L)) vs MatchAC (O(N)) 性能差异
+func BenchmarkMatchAC(b *testing.B) {
+	words := make([]string, 0, 4000)
+	for i := 0; i < 2000; i++ {
+		words = append(words, genASCIIWord(i, 4))
+	}
+	for i := 0; i < 2000; i++ {
+		words = append(words, genChineseWord(i, 3))
+	}
+	tree := core.NewDFATree()
+	for _, w := range words {
+		tree.Insert(w, 0)
+	}
+	// 构建 AC 失效链接（匹配前执行一次）
+	tree.BuildFailureLinks()
+
+	// 构造混合文本（ASCII + 中文），模拟 confusable 映射后的输入
+	text := strings.Repeat("abcdefghij ", 30) + strings.Repeat("测试敏感词过滤内容安全检测", 30)
+	textRunes := []rune(text)
+
+	b.Run("Match(O(N×L))", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = tree.Match(text, textRunes)
+		}
+	})
+
+	b.Run("MatchAC(O(N))", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_ = tree.MatchAC(textRunes)
+		}
+	})
+}
+
+// genASCIIWord 生成指定长度的 ASCII 单词
+func genASCIIWord(seed int, length int) string {
+	var sb strings.Builder
+	sb.Grow(length)
+	base := 'a'
+	for i := 0; i < length; i++ {
+		sb.WriteRune(rune(int(base) + (seed+i)%26))
+		seed += 7
+	}
+	return sb.String()
+}
+
+// genChineseWord 生成指定长度的中文单词
+func genChineseWord(seed int, length int) string {
+	var sb strings.Builder
+	sb.Grow(length * 3)
+	base := 0x4E00
+	for i := 0; i < length; i++ {
+		sb.WriteRune(rune(int(base) + (seed+i)%20902))
+		seed += 13
 	}
 	return sb.String()
 }

@@ -189,8 +189,8 @@ type AlertCallback func(record AlertRecord)
 // DegradeConfig 降级策略配置
 // 当系统资源不足以支持完整反清洗功能时，自动触发降级以保证核心服务可用
 type DegradeConfig struct {
-	// MaxMemoryMB 最大内存阈值（MB），超过此值触发降级
-	// 0 表示不限制
+	// MaxMemoryMB 内存阈值（MB），可用内存低于此值时触发降级
+	// 0 表示不启用自动降级
 	MaxMemoryMB int
 	// FallbackToExact 降级后是否回退到精确匹配（关闭反清洗）
 	FallbackToExact bool
