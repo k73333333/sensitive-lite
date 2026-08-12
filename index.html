@@ -6,7 +6,7 @@
   
   <!-- ===== SEO 基础标签 ===== -->
   <title>sensitive-lite — 轻量级敏感词过滤组件 | 低配置服务器友好的 Go 内容审核引擎</title>
-  <meta name="description" content="sensitive-lite 是一个基于 Go 语言开发的轻量级敏感词过滤组件，专为低内存机器和高并发场景设计。10 万词仅需 40MB 内存，支持 14 种反清洗识别（零宽字符、形近字、同音字、全角变体、西里尔同形等），10 并发达 28.5 万 ops/s。MIT 协议开源。">
+  <meta name="description" content="sensitive-lite 是一个基于 Go 语言开发的轻量级敏感词过滤组件，专为低内存机器和高并发场景设计。10 万词约 51MB 内存，支持 14 种反清洗识别（零宽字符、形近字、同音字、全角变体、西里尔同形等），Contains 并发达 230 万 ops/s。MIT 协议开源。">
   <meta name="keywords" content="敏感词过滤,敏感词检测,内容审核,Go敏感词,DFA算法,反清洗,低内存,轻量级,高并发,开源,Go语言,文本过滤,安全检测,内容安全,sensitive-lite">
   <meta name="author" content="sensitive-lite">
   <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
@@ -16,7 +16,7 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="sensitive-lite">
   <meta property="og:title" content="sensitive-lite — 轻量级敏感词过滤组件 | 低配置服务器友好">
-  <meta property="og:description" content="基于 Go 语言的轻量级敏感词过滤组件。10 万词仅 40MB 内存，支持 14 种反清洗识别，专为低内存服务器和高并发场景设计。">
+  <meta property="og:description" content="基于 Go 语言的轻量级敏感词过滤组件。10 万词约 51MB 内存，支持 14 种反清洗识别，专为低内存服务器和高并发场景设计。">
   <meta property="og:url" content="https://sensitive-lite.github.io/sensitive-lite/">
   <meta property="og:image" content="https://sensitive-lite.github.io/sensitive-lite/og-image.png">
   <meta property="og:image:width" content="1200">
@@ -27,7 +27,7 @@
   <!-- ===== Twitter Card ===== -->
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="sensitive-lite — 轻量级敏感词过滤组件 | 低配置服务器友好">
-  <meta name="twitter:description" content="基于 Go 语言的轻量级敏感词过滤组件。10 万词仅 40MB 内存，支持 14 种反清洗识别，专为低内存服务器和高并发场景设计。">
+  <meta name="twitter:description" content="基于 Go 语言的轻量级敏感词过滤组件。支持 14 种反清洗识别，专为低内存服务器和高并发场景设计。">
   <meta name="twitter:image" content="https://sensitive-lite.github.io/sensitive-lite/og-image.png">
   
   <!-- ===== 结构化数据 Schema.org（JSON-LD） ===== -->
@@ -38,11 +38,11 @@
     "name": "sensitive-lite",
     "applicationCategory": "DeveloperApplication",
     "operatingSystem": "Linux, macOS, Windows",
-    "description": "轻量级敏感词过滤组件，基于 Go 语言开发，专为低内存机器和高并发场景设计。10 万词仅需 40MB 内存，支持 14 种反清洗识别，10 并发达 28.5 万 ops/s。",
+    "description": "轻量级敏感词过滤组件，基于 Go 语言开发，专为低内存机器和高并发场景设计。10 万词约 51MB 内存，支持 14 种反清洗识别，Contains 并发达 230 万 ops/s。",
     "url": "https://github.com/kaidong77/sensitive-lite",
     "license": "https://opensource.org/licenses/MIT",
     "programmingLanguage": "Go",
-    "version": "3.1.0",
+    "version": "3.2.0",
     "author": {
       "@type": "Organization",
       "name": "sensitive-lite"
@@ -53,14 +53,14 @@
       "priceCurrency": "USD"
     },
     "featureList": [
-      "低内存占用（10万词仅40MB）",
-      "高并发无锁设计（28.5万ops/s）",
+      "低内存占用（10万词约51MB）",
+      "高并发无锁设计（Contains 230万ops/s）",
       "14种反清洗识别（零宽字符、形近字、同音字、全角变体、西里尔同形等）",
-      "自动降级容灾机制",
+      "自动降级容灾机制（低则降/高则升）",
       "溯源追踪与告警通知",
-      "DFA 双数组优化节点存储"
+      "DFA + Aho-Corasick 混合匹配引擎"
     ],
-    "softwareVersion": "3.1.0",
+    "softwareVersion": "3.2.0",
     "datePublished": "2025-01-01",
     "dateModified": "2026-08-11"
   }
@@ -77,7 +77,7 @@
         "name": "sensitive-lite 适合低配置服务器吗？",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "非常合适。sensitive-lite 专为低内存环境设计，加载 10 万敏感词仅需约 40MB 运行时内存，比传统 map DFA 实现节省 42% 内存。在 256MB 可用内存的服务器上，10 并发 1000 次请求无 OOM。"
+          "text": "非常合适。sensitive-lite 专为低内存环境设计，加载 10 万敏感词约需 51MB 运行时内存（v3.2 含 AC 失效链接 + ASCII 直索引优化）。在 256MB 可用内存的服务器上可稳定运行，内存不足时自动降级为精确匹配，恢复后自动恢复反清洗。"
         }
       },
       {
@@ -93,7 +93,7 @@
         "name": "sensitive-lite 的性能如何？",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "在 10,000 词库下，精确匹配可达 11.7 万次/秒，反清洗识别约 8.3 万次/秒，Contains 快速判断达 23.8 万次/秒，100 并发下 FindAll 达 28.5 万次/秒。所有操作均无锁并发安全。"
+          "text": "在 10,000 词库下（Intel i7-12800HX）：精确匹配约 4.5 万次/秒（含位置还原），反清洗识别约 3.8 万次/秒（含 11 步标准化管线），Contains 快速判断达 31.1 万次/秒，Contains 并发达 230 万次/秒。所有读操作均无锁并发安全。"
         }
       },
       {
@@ -101,7 +101,7 @@
         "name": "如何快速接入 sensitive-lite？",
         "acceptedAnswer": {
           "@type": "Answer",
-          "text": "使用 go get github.com/sensitive-lite/sensitive-lite 安装，准备自定义敏感词列表后，一行代码即可创建过滤器：filter := sensitive.New(words)。默认开启反清洗识别，无需额外配置。"
+          "text": "使用 go get github.com/kaidong77/sensitive-lite 安装，准备自定义敏感词列表后，一行代码即可创建过滤器：filter := sensitive.New(words)。默认开启反清洗识别，无需额外配置。"
         }
       }
     ]
@@ -508,7 +508,7 @@
   <div class="container">
     <a href="/sensitive-lite/" class="nav-brand" aria-label="sensitive-lite 首页">
       &#x25C6; sensitive-lite
-      <span>v3.1</span>
+      <span>v3.2</span>
     </a>
     <ul class="nav-links">
       <li><a href="#features">核心特性</a></li>
@@ -531,7 +531,7 @@
       <em>轻量级敏感词过滤组件</em>
     </h1>
     <p class="hero-subtitle">
-      基于 Go 语言的高性能敏感词检测引擎。10 万敏感词仅需 <strong>40MB</strong> 内存，支持 <strong>14 种</strong>反清洗识别，<strong>28.5 万 ops/s</strong> 无锁并发。
+      基于 Go 语言的高性能敏感词检测引擎。10 万敏感词约 <strong>51MB</strong> 内存，支持 <strong>14 种</strong>反清洗识别，Contains 并发 <strong>230 万 ops/s</strong> 无锁读取。
     </p>
     <div class="hero-actions">
       <a href="#quickstart" class="btn btn-primary">&#x2193; 快速开始</a>
@@ -544,12 +544,12 @@
 <div class="container">
   <div class="stats-bar">
     <div class="stat-card">
-      <div class="stat-value">~40 MB</div>
+      <div class="stat-value">~51 MB</div>
       <div class="stat-label">10 万词运行时内存</div>
     </div>
     <div class="stat-card">
-      <div class="stat-value">285k</div>
-      <div class="stat-label">ops/s 高并发匹配</div>
+      <div class="stat-value">230万</div>
+      <div class="stat-label">ops/s Contains 并发</div>
     </div>
     <div class="stat-card">
       <div class="stat-value">14 种</div>
@@ -572,25 +572,19 @@
       <article class="feature-card">
         <div class="feature-icon fi-mem" aria-hidden="true">&#x1F9E0;</div>
         <h3>超低内存占用</h3>
-        <p>加载 10 万敏感词仅需 ~40MB 运行时内存，较传统 map DFA 实现<strong>节省 42%</strong>。256MB 可用内存即可稳定运行 10 并发无 OOM。</p>
+        <p>v3.2 加载 10 万敏感词约 <strong>51MB</strong> 运行时内存（含 AC 失效链接 + ASCII 直索引）。纯中文节点零额外开销，每万词约 5.1 MB，256MB 服务器可稳定运行。</p>
       </article>
       <!-- 高并发 -->
       <article class="feature-card">
         <div class="feature-icon fi-speed" aria-hidden="true">&#x26A1;</div>
         <h3>无锁高并发</h3>
-        <p>纯 DFA 匹配引擎采用双数组节点结构，100 并发下 FindAll 达 <strong>28.5 万 ops/s</strong>。Contains 快速判断高达 23.8 万 ops/s。</p>
+        <p>DFA + Aho-Corasick 混合匹配引擎，Contains 并发 <strong>230 万 ops/s</strong>，单次延迟仅 434 ns。FindAll <strong>27.9 万 ops/s</strong>，所有读操作无锁并发安全。</p>
       </article>
       <!-- 强大反清洗 -->
       <article class="feature-card">
         <div class="feature-icon fi-clean" aria-hidden="true">&#x1F6E1;</div>
         <h3>14 种反清洗识别</h3>
-        <p>覆盖零宽字符、形近字替换、同音字替换、全角半角变体、西里尔/希腊同形字母、Emoji 干扰、Leet Speak、CJK 重复压缩等全方位反制策略。</p>
-      </article>
-      <!-- 安全可靠 -->
-      <article class="feature-card">
-        <div class="feature-icon fi-safe" aria-hidden="true">&#x1F512;</div>
-        <h3>生产级容灾机制</h3>
-        <p>内置三级降级策略：基于可用内存的自动降级、手动降级恢复、匹配耗时告警。降级后自动回退到纯精确匹配，<strong>杜绝服务雪崩</strong>。</p>
+        <p>覆盖零宽字符、形近字替换、同音字替换、全角半角变体、西里尔/希腊同形字母、Emoji 干扰、Leet Speak、CJK 重复压缩、数学字母标准化等全方位反制策略。</p>
       </article>
       <!-- 灵活配置 -->
       <article class="feature-card">
@@ -601,8 +595,8 @@
       <!-- 自动降级 -->
       <article class="feature-card">
         <div class="feature-icon fi-degrade" aria-hidden="true">&#x1F4CA;</div>
-        <h3>智能降级与监控</h3>
-        <p>支持 CheckMemoryAndDegrade 自动降级、Degrade/Recover 手动控制、TotalMatches 累计命中计数。降级前触发 AlertCallback 告警通知。</p>
+        <h3>自动降级与恢复</h3>
+        <p>智能降级 CheckMemoryAndDegrade：内存低时自动关闭反清洗，恢复后<strong>自动恢复</strong>反清洗功能。MaxMemoryMB=0 关闭自动降级。</p>
       </article>
       <!-- 准确率 -->
       <article class="feature-card">
@@ -705,18 +699,18 @@
 <section id="performance" aria-labelledby="perf-title">
   <div class="container">
     <h2 id="perf-title" class="section-title">性能基准测试</h2>
-    <p class="section-desc">在低配置环境（2核 CPU / 256MB 可用内存）下实测数据。</p>
+    <p class="section-desc">实测环境：Intel i7-12800HX / Go 1.22，10,000 词库 + 反清洗。</p>
     
     <div class="perf-grid">
       <div class="perf-table-wrap">
-        <h3>&#x1F4BE; 内存占用（10 万词）</h3>
+        <h3>&#x1F4BE; 多规模内存占用</h3>
         <table>
-          <thead><tr><th>指标</th><th>数值</th></tr></thead>
+          <thead><tr><th>词库规模</th><th>分配内存</th><th>每万词</th></tr></thead>
           <tbody>
-            <tr><td>DFA 构建内存增量</td><td>~33.7 MB</td></tr>
-            <tr><td>总运行时内存</td><td><strong>~40 MB</strong></td></tr>
-            <tr><td>较传统 map DFA 节省</td><td>42%</td></tr>
-            <tr><td>256MB 环境 10 并发</td><td>1000 次无 OOM</td></tr>
+            <tr><td>6 万词</td><td>31.9 MB</td><td>5.3 MB</td></tr>
+            <tr><td>10 万词</td><td><strong>50.9 MB</strong></td><td>5.1 MB</td></tr>
+            <tr><td>14 万词</td><td>76.1 MB</td><td>5.4 MB</td></tr>
+            <tr><td>v3.2 字段开销</td><td colspan="2">每节点 +18B（~10%）</td></tr>
           </tbody>
         </table>
       </div>
@@ -724,12 +718,12 @@
       <div class="perf-table-wrap">
         <h3>&#x1F4E1; 操作吞吐量（1 万词）</h3>
         <table>
-          <thead><tr><th>操作</th><th>ops/s</th></tr></thead>
+          <thead><tr><th>操作</th><th>ops/s</th><th>延迟</th></tr></thead>
           <tbody>
-            <tr><td>FindAll（精确）</td><td>117,000</td></tr>
-            <tr><td>FindAll（反清洗）</td><td>83,000</td></tr>
-            <tr><td>Contains</td><td>238,000</td></tr>
-            <tr><td>FindAll（100 并发）</td><td><strong>285,000</strong></td></tr>
+            <tr><td>FindAll（精确）</td><td>45,000</td><td>22.1 µs</td></tr>
+            <tr><td>FindAll（反清洗）</td><td>38,000</td><td>26.1 µs</td></tr>
+            <tr><td>Contains</td><td>311,000</td><td>3.2 µs</td></tr>
+            <tr><td>Contains 并发</td><td><strong>2,300,000</strong></td><td>434 ns</td></tr>
           </tbody>
         </table>
       </div>
@@ -828,7 +822,7 @@
 <footer>
   <div class="container">
     <p>
-      <strong>sensitive-lite</strong> &mdash; 轻量级敏感词过滤组件 v3.1<br>
+      <strong>sensitive-lite</strong> &mdash; 轻量级敏感词过滤组件 v3.2<br>
       <a href="https://github.com/kaidong77/sensitive-lite" rel="noopener" target="_blank">GitHub</a>
       &nbsp;&middot;&nbsp;
       <a href="https://github.com/kaidong77/sensitive-lite/blob/main/LICENSE" rel="noopener" target="_blank">MIT License</a>
